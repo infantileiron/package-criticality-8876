@@ -1,0 +1,4 @@
+-- 增量升级由 src/config/migrate.py::ensure_schema() 执行，兼容已有数据库卷。
+-- schedule_runs 新增：active_key（同情景唯一活动运行）、attempt_count、recovery_count、
+-- retry_of、claim_token、lease_until、started_at、finished_at。
+-- 建议索引：CREATE UNIQUE INDEX uq_schedule_runs_active_key ON schedule_runs(active_key);

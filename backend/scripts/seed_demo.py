@@ -1,6 +1,7 @@
 import json
 from sqlalchemy import select,func
 from src.config.database import Base,engine,Session
+from src.config.migrate import ensure_schema
 from src.models import User,WorkPackage,TaskDependency,DurationScenario,ScheduleRun,DeliveryReview,Report
 from src.services.analysis import analyze
 from src.utils.security import hash_password
@@ -8,7 +9,7 @@ from src.utils.time import now
 from src.utils.serialization import serialize
 
 def seed():
- Base.metadata.create_all(engine)
+ Base.metadata.create_all(engine);ensure_schema()
  with Session() as db:
   for role in ('admin','analyst','viewer'):
    if not db.get(User,role):db.add(User(id=role,email=role+'@duochuan.demo',password=hash_password('Schedule2026!'),role=role))

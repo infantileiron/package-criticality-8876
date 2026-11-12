@@ -5,12 +5,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from src.config.database import engine
+from src.config.migrate import ensure_schema
 from src.config.settings import SEED_DEMO,REDIS_URL
 from src.middlewares.errors import ErrorMiddleware
 from src.middlewares.audit import AuditMiddleware
 from src.routes import auth,packages,dependencies,scenarios,runs,reviews,reports,audit
 @asynccontextmanager
 async def lifespan(app):
+ ensure_schema()
  if SEED_DEMO:
   try:
    from scripts.seed_demo import seed

@@ -9,8 +9,8 @@
 1. 09:00 计划员核对「检修通道加固工作包」24个具名任务与三点工期。
 2. 09:05 检查现场交接、区域围护、并行施工、联合复检等30条零等待FS关系，保留独立备件盘点任务。
 3. 09:10 选择32小时截止期、1500样本与固定seed=2410，冻结任务/边/三点范围的情景v1。
-4. 09:15 提交Redis队列，由独立worker计算最可能工期基线与每次独立工期抽样。
-5. 09:20 查看24小时CPM基线，核对ES/EF/LS/LF/总时差与关键连接。
+4. 09:15 提交Redis队列，由独立worker计算最可能工期基线与每次独立工期抽样；同一冻结情景的并发申请复用同一活动运行。
+5. 09:20 查看24小时CPM基线，核对ES/EF/LS/LF/总时差与关键连接；页面显示尝试次数、恢复状态与失败原因，失败记录可从页面重试。
 6. 09:25 查看完工样本分布、分位数、达标次数/分母及逐任务关键次数。
 7. 09:30 写明独立工期、资源/天气共因未建模等边界，提交接受或待补充复核版本。
 8. 09:40 负责人批准最新接受版本，下载逐任务CSV；后续新增依赖只进入新情景，不改写旧快照。
@@ -56,6 +56,17 @@ docker compose exec backend python -m scripts.seed_demo
 
 六实体 WorkPackage、TaskDependency、DurationScenario、ScheduleRun、DeliveryReview、Report，贯穿model/schema/service/route、前端API/store与领域页。情景按工作包版本化并冻结完整任务和边；运行保存结果/校验和；复核新增不可变版本；归档绑定接受复核ID，后续待补充版本不修改旧CSV。
 
+### 单一活动运行与恢复
+
+`ScheduleRun.active_key` 是 `schedule_runs` 上的唯一键：同一冻结情景最多一个 `queued/running` 运行。并发 `POST /runs` 先查活动运行，创建失败再以唯一键冲突回读并复用先到者，响应 `reused=true`，队列只投递一次。完成或失败时清空 `active_key`，运行进入终态；旧运行行永不删除。
+
+- 队列重复投递：worker `claim` 只领取 `queued` 或租约过期的 `running`，已领取/已终态的消息直接丢弃，结果只发布一次。`claim_token` 为空表示运行已由恢复扫描重新派发，可直接领取。
+- 中断恢复：worker 计算期间由心跳线程每10秒续租（30秒租约）；进程崩溃后租约过期，恢复扫描把 `running` 重新入队并 `recovery_count+1`、清空 `claim_token`。`queued` 运行由 `lease_until` 作为30秒派发窗口，窗口内未被领取即重投。
+- 迟到回写：`terminate` 用 `WHERE claim_token=:token AND status='running'` 条件更新。租约被接管、运行已终态或 `claim_token` 已清空时，旧执行的迟到结果/失败均不写入。
+- 失败重试：`POST /runs/{id}/retry` 只接受 `failed` 运行；创建新运行并 `attempt_count=原次数+1`、`retry_of=原运行ID`，原失败行与原因保留。`completed` 运行拒绝重试，成功结果、已批准复核与报告及CSV绑定均不受重试影响。重试同样受活动运行唯一键约束，已有活动运行时返回 `reused=true`。
+- 页面：运行选择器与详情显示尝试次数、恢复次数与当前状态；失败时显示具体原因并提供“从失败记录重试”；同一情景存在多条尝试时展示尝试记录表。API 不返回 `claim_token`。
+- 已存在数据库卷由 `backend/src/config/migrate.py::ensure_schema()` 在启动/seed时增量加列并建立唯一索引；升级前若同情景有多个活动运行，保留最早一条，其余标记失败并保留原因。
+
 | 部分 | 技术 |
 |---|---|
 | 前端 | Vue3、TypeScript、Vite、真实SVG DAG/直方图与关键度 |
@@ -72,7 +83,7 @@ docker compose exec backend python -m scripts.seed_demo
 
 ## 已知边界与清理
 
-最多60个任务、后台100至5000样本；JSON表单导入，后续修改通过新工作包或新情景，不覆盖已冻结范围。完整DAG可局部横向滚动，节点ID、m工期、ES→EF与关键线同表核对。单worker未实现生产级分布式租约；初始SQLAlchemy建表不含生产迁移回滚；无多租户隔离。模拟范围和独立工期假设不代表真实工期分布。
+最多60个任务、后台100至5000样本；JSON表单导入，后续修改通过新工作包或新情景，不覆盖已冻结范围。完整DAG可局部横向滚动，节点ID、m工期、ES→EF与关键线同表核对。租约与恢复针对单worker设计：多worker并发时依赖数据库行锁与 `claim_token` 条件更新，但未实现分布式限流或任务抢占优先级；`ensure_schema` 只做增量加法，不含生产级回滚；无多租户隔离。模拟范围和独立工期假设不代表真实工期分布。
 
 ```sh
 docker compose down -v --remove-orphans
